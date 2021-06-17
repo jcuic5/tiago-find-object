@@ -1,0 +1,8 @@
+# Define the goal
+# Specify the target pose of end_effector in Cartesian space
+geometry_msgs/PoseStamped object_pose  
+---
+# Define the result
+---
+# Define a feedback message
+float32 percent_complete

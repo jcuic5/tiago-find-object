@@ -1,0 +1,248 @@
+/*
+ * @Author: Jianfeng Cui 
+ * @Date: 2021-05-06 03:14:45 
+ * @Last Modified by: Jianfeng Cui
+ * @Last Modified time: 2021-05-06 03:15:06
+ */
+/*
+ * Copyright 2019 PAL Robotics SL. All Rights Reserved
+ *
+ * Unauthorized copying of this file, via any medium is strictly prohibited,
+ * unless it was supplied under the terms of a license agreement or
+ * nondisclosure agreement with PAL Robotics SL. In this case it may not be
+ * copied or disclosed except in accordance with the terms of that agreement.
+ */
+
+
+/** \author Alessandro Di Fava. */
+
+/**
+ * @file
+ *
+ * @brief example on how to subscribe to an image topic and how to make the robot look towards a given direction
+ *
+ * How to test this application:
+ *
+ * 1) Launch the application:
+ *
+ *   $ rosrun tiago_dual_tutorials head_look_to_point
+ *
+ * 2) Click on image pixels to make TIAGo++ look towards that direction
+ *
+ */
+
+// C++ standard headers
+#include <exception>
+#include <string>
+
+// Boost headers
+#include <boost/shared_ptr.hpp>
+
+// ROS headers
+#include <ros/ros.h>
+#include <image_transport/image_transport.h>
+#include <actionlib/client/simple_action_client.h>
+#include <actionlib/server/simple_action_server.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <geometry_msgs/PointStamped.h>
+#include <control_msgs/PointHeadAction.h>
+#include <sensor_msgs/image_encodings.h>
+#include <ros/topic.h>
+#include "set_nav_goal/ToPerceptionAction.h"
+
+// OpenCV headers
+#include <opencv2/highgui/highgui.hpp>
+#include <cv_bridge/cv_bridge.h>
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static const std::string windowName      = "Inside of TIAGo++'s head";
+static const std::string cameraFrame     = "/xtion_rgb_optical_frame";
+static const std::string imageTopic      = "/xtion/rgb/image_raw";
+static const std::string cameraInfoTopic = "/xtion/rgb/camera_info";
+
+// Our Action interface type for moving TIAGo++'s head, provided as a typedef for convenience
+typedef actionlib::SimpleActionClient<control_msgs::PointHeadAction> PointHeadClient;
+typedef boost::shared_ptr<PointHeadClient> PointHeadClientPtr;
+typedef actionlib::SimpleActionServer<set_nav_goal::ToPerceptionAction> ToPerceptionServer;
+
+
+class FindObject
+{
+  protected:
+    ros::NodeHandle nh_;
+    PointHeadClientPtr pointHeadClient_;
+    ToPerceptionServer toPercServer_;
+
+    set_nav_goal::ToPerceptionFeedback feedback_;
+    set_nav_goal::ToPerceptionResult result_;
+
+    image_transport::Subscriber imageSub_;
+
+    cv::Mat cameraIntrinsics_;
+
+    ros::Time latestImageStamp;
+
+  public:
+    FindObject(cv::Mat c):
+      toPercServer_(nh_, "/to_perception", &FindObject::execute, false), cameraIntrinsics_(c)
+    {
+      createPointHeadClient(pointHeadClient_);
+      toPercServer_.start();
+
+      ROS_INFO_STREAM("Subscribing to " << imageTopic << " ...");
+
+      image_transport::ImageTransport it(nh_);
+      image_transport::TransportHints transportHint("compressed");
+      // NOTE the position of 'this' pointer
+      imageSub_ = it.subscribe(imageTopic, 1, &FindObject::imageCallback, this, transportHint);
+    }
+
+  ~FindObject(void){}
+
+  void execute(const set_nav_goal::ToPerceptionGoalConstPtr& goal)
+  {
+    ROS_INFO("Executing ToPerception");
+
+    bool success = true;
+
+    if (toPercServer_.isPreemptRequested() || !ros::ok())
+    {
+      ROS_INFO("Preempted");
+      // set the action state to preempted
+      toPercServer_.setPreempted();
+      success = false;
+    }
+
+    auto ph_goal = getPointHeadGoal();
+    pointHeadClient_->sendGoal(ph_goal);
+    // ros::Duration(0.5).sleep();
+    pointHeadClient_ -> waitForResult();
+    if(pointHeadClient_ -> getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
+    {
+      ROS_INFO("Point Head Goal succeeded!");
+      success = true;
+    }
+    else
+      ROS_INFO("Point Head Goal failed");
+
+    if(success)
+    {
+      geometry_msgs::Pose object_pose;
+      object_pose.position.x = 0.1;
+      object_pose.position.y = 0.1;
+      object_pose.position.z = 0.1;
+      object_pose.orientation.x = 0.0;
+      object_pose.orientation.y = 0.0;
+      object_pose.orientation.z = 0.0;
+      object_pose.orientation.w = 0.0;
+      result_.object_pose = object_pose;
+      toPercServer_.setSucceeded(result_, "Object Detection Succeed");
+      ROS_INFO("To Perception Goal succeeded!");
+    }
+  }
+
+  // ROS call back for every new image received
+  void imageCallback(const sensor_msgs::ImageConstPtr& imgMsg)
+  {
+    // std::cout << "inside image cb" << std::endl;
+    latestImageStamp = imgMsg->header.stamp;
+
+    cv_bridge::CvImagePtr cvImgPtr;
+
+    cvImgPtr = cv_bridge::toCvCopy(imgMsg, sensor_msgs::image_encodings::BGR8);
+    cv::imshow(windowName, cvImgPtr->image);
+    cv::waitKey(15);
+  }
+
+// OpenCV callback function for mouse events on a window
+  control_msgs::PointHeadGoal getPointHeadGoal(int u = 228, int v = 330)
+  {
+    ROS_INFO_STREAM("Pixel selected (" << u << ", " << v << ") Making TIAGo++ look to that direction");
+
+    geometry_msgs::PointStamped pointStamped;
+
+    pointStamped.header.frame_id = cameraFrame;
+    pointStamped.header.stamp    = latestImageStamp;
+
+    //compute normalized coordinates of the selected pixel
+    double x = ( u  - cameraIntrinsics_.at<double>(0,2) )/ cameraIntrinsics_.at<double>(0,0);
+    double y = ( v  - cameraIntrinsics_.at<double>(1,2) )/ cameraIntrinsics_.at<double>(1,1);
+    double Z = 1.0; //define an arbitrary distance
+    pointStamped.point.x = x * Z;
+    pointStamped.point.y = y * Z;
+    pointStamped.point.z = Z;   
+
+    //build the action goal
+    control_msgs::PointHeadGoal goal;
+    //the goal consists in making the Z axis of the cameraFrame to point towards the pointStamped
+    goal.pointing_frame = cameraFrame;
+    goal.pointing_axis.x = 0.0;
+    goal.pointing_axis.y = 0.0;
+    goal.pointing_axis.z = 1.0;
+    goal.min_duration = ros::Duration(1.0);
+    goal.max_velocity = 0.25;
+    goal.target = pointStamped;
+
+    return goal;
+  }
+
+  // Create a ROS action client to move TIAGo's head
+  void createPointHeadClient(PointHeadClientPtr& actionClient)
+  {
+    ROS_INFO("Creating action client to head controller ...");
+
+    actionClient.reset( new PointHeadClient("/head_controller/point_head_action") );
+
+    int iterations = 0, max_iterations = 3;
+    // Wait for head controller action server to come up
+    while( !actionClient->waitForServer(ros::Duration(2.0)) && ros::ok() && iterations < max_iterations )
+    {
+      ROS_DEBUG("Waiting for the point_head_action server to come up");
+      ++iterations;
+    }
+
+    if ( iterations == max_iterations )
+      throw std::runtime_error("Error in createPointHeadClient: head controller action server not available");
+  }
+
+};
+int main(int argc, char** argv)
+{
+  // Init the ROS node
+  ros::init(argc, argv, "find_object");
+
+  // Precondition: Valid clock
+  if (!ros::Time::waitForValid(ros::WallDuration(10.0))) // NOTE: Important when using simulated clock
+  {
+    ROS_FATAL("Timed-out waiting for valid time.");
+    return EXIT_FAILURE;
+  }
+
+  ROS_INFO("Starting find_object application ...");
+
+  // Get the camera intrinsic parameters from the appropriate ROS topic
+  ROS_INFO("Waiting for camera intrinsics ... ");
+  cv::Mat cameraIntrinsics;
+  sensor_msgs::CameraInfoConstPtr msg = ros::topic::waitForMessage
+      <sensor_msgs::CameraInfo>(cameraInfoTopic, ros::Duration(10.0));
+  if(msg.use_count() > 0)
+  {
+    cameraIntrinsics = cv::Mat::zeros(3,3,CV_64F);
+    cameraIntrinsics.at<double>(0, 0) = msg->K[0]; //fx
+    cameraIntrinsics.at<double>(1, 1) = msg->K[4]; //fy
+    cameraIntrinsics.at<double>(0, 2) = msg->K[2]; //cx
+    cameraIntrinsics.at<double>(1, 2) = msg->K[5]; //cy
+    cameraIntrinsics.at<double>(2, 2) = 1;
+  }
+
+  // Create the window to show TIAGo++'s camera images
+  cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
+
+  FindObject server(cameraIntrinsics);
+  ros::spin();
+
+  cv::destroyWindow(windowName);
+
+  return EXIT_SUCCESS;
+}

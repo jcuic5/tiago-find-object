@@ -1,0 +1,14 @@
+<launch>
+
+	<!-- <include file="$(find retail_store_simulation)/launch/tiago_simulation.launch">
+    	
+    </include> -->
+    
+    <node pkg="move_arm" type="move_arm" name="move_arm" output="screen"/>
+
+    <node pkg="find_object" type="find_object" name="find_object" output="screen"/>
+
+    <node pkg="set_nav_goal" type="set_nav_goal" name="set_nav_goal" output="screen"/>
+
+
+</launch>
