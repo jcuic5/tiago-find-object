@@ -1,4 +1,4 @@
-# TIAGo_find_object
+# tiago-find-object
 ### A brief introduction
 
 See a blog [here](https://aakaashradhoe.medium.com/3d-object-detection-for-tiago-robot-using-a-faster-r-cnn-network-c2d1768f7490) and there is a recorded video [here](https://drive.google.com/file/d/1VqTg8dFCKsVXLAXaDL9LmUPcT7icDjg0/view?usp=sharing) to show how it works.
